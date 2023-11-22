@@ -1,0 +1,32 @@
+{
+    "infer-train-accuracy": 0.6829,
+    "infer-valid-A-accuracy": 0.6643,
+    "infer-valid-B-accuracy": 0.6194,
+    "infer-train-label_accuracies": [
+        0.6463,
+        0.872,
+        0.5305,
+        0.75,
+        0.6463,
+        0.6524
+    ],
+    "infer-train-best_epoch": 192,
+    "infer-valid-A-label_accuracies": [
+        0.6197,
+        0.831,
+        0.5634,
+        0.7465,
+        0.6056,
+        0.6197
+    ],
+    "infer-valid-A-best_epoch": 94,
+    "infer-valid-B-label_accuracies": [
+        0.5333,
+        0.8333,
+        0.5,
+        0.6667,
+        0.6,
+        0.5833
+    ],
+    "infer-valid-B-best_epoch": 11
+}

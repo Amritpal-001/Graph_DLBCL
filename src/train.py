@@ -195,7 +195,7 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                     # print(pred, gtruth)
                     curr_score, label_accuracies = multilabel_accuracy(pred, gtruth)
                     logging_dict[f"{loader_name}-accuracy"] = float(curr_score)
-                    print(loader_name , "label_accuracies" , label_accuracies)
+                    # print(loader_name , "label_accuracies" , label_accuracies)
                     # logging_dict[f"{loader_name}-individual_accuracy"] = float(label_accuracies)
                 else:
                     # logging_dict[f"{loader_name}-microf1"] = metrics.f1_score(pred, gtruth, average='micro')
@@ -205,6 +205,9 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                 try:
                     if curr_score >= best_score[f"{loader_name}-accuracy"]:
                         best_score[f"{loader_name}-accuracy"] = curr_score
+                        best_score[f"{loader_name}-label_accuracies"] = label_accuracies.tolist()
+                        best_score[f"{loader_name}-best_epoch"] = epoch
+
                 except:
                     best_score[f"{loader_name}-accuracy"] = 0
                 # logging_dict[f"{loader_name}-raw-pred"] = pred
@@ -234,6 +237,10 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
             new_stats[epoch] = old_epoch_stats
             save_as_json(new_stats, save_dir/"stats.json", exist_ok=True)
 
+            # Save the dictionary to a JSON file
+            with open(save_dir/"best_score.json", 'w') as json_file:
+                json.dump(best_score, json_file, indent=4)
+
         plt.figure()
         for pkey in new_stats[0].keys():
             vals = [new_stats[eitr][pkey] for eitr in range(epoch+1)]
@@ -250,8 +257,8 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                 f"{save_dir}/epoch={epoch:03d}.weights.pth",
                 f"{save_dir}/epoch={epoch:03d}.aux.dat",
             )
+            print("best_score" , best_score)
 
-        print("best_score" , best_score)
     return step_output
 
 def reset_logging(save_path: str | Path) -> None:
