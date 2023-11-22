@@ -244,18 +244,21 @@ def add_features_and_create_new_dicts(datpaths, imgpaths, updatpaths):
         cellfeat_list_temp = [x for x in cellfeat_list if x is not None]
         valid_cells_n = len(cellfeat_list_temp)
         total_cells_n = len(cellfeat_list)
-        valid_cell_frac = (valid_cells_n/total_cells_n)
-        
-        if valid_cell_frac < 1.0:
-            print('updatpath:', updatpath)
-            print('datpath:', datpath)
-            print('imgpath:', imgpath)
-            print(f'valid_cells_frac {valid_cell_frac} = 1-{total_cells_n-valid_cells_n}/{total_cells_n}')
+        if total_cells_n >= 100:
+            valid_cell_frac = (valid_cells_n/total_cells_n)
+            
+            if valid_cell_frac < 1.0:
+                print('updatpath:', updatpath)
+                print('datpath:', datpath)
+                print('imgpath:', imgpath)
+                print(f'valid_cells_frac {valid_cell_frac} = 1-{total_cells_n-valid_cells_n}/{total_cells_n}')
 
-        celldatanew_dict = {
-            k: {**v, 'intensity_feats': feats}
-            for (k, v), feats in zip(celldata_list, cellfeat_list)
-            if feats is not None
-        }
-        joblib.dump(celldatanew_dict, updatpath)
-        
+            celldatanew_dict = {
+                k: {**v, 'intensity_feats': feats}
+                for (k, v), feats in zip(celldata_list, cellfeat_list)
+                if feats is not None
+            }
+            joblib.dump(celldatanew_dict, updatpath)
+        else:
+             print("<100 cells", datpath, imgpath)
+            
