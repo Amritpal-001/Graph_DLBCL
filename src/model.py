@@ -30,6 +30,7 @@ class SlideGraphArch(nn.Module):
         pooling: str = "max",
         dropout: int = 0.0,
         conv: str = "GINConv",
+        CLASSIFICATION_TYPE = "OS",
         *,
         gembed: bool = False,
         **kwargs: dict,
@@ -41,6 +42,7 @@ class SlideGraphArch(nn.Module):
         self.dropout = dropout
         self.embeddings_dim = layers
         self.num_layers = len(self.embeddings_dim)
+        self.CLASSIFICATION_TYPE = CLASSIFICATION_TYPE
         self.nns = []
         self.convs = []
         self.linears = []
@@ -163,6 +165,7 @@ class SlideGraphArch(nn.Module):
         wsi_graphs = batch_data["graph"].to(device)
         wsi_labels = batch_data["label"].to(device)
         model = model.to(device)
+        
 
         # Data type conversion
         wsi_graphs.x = wsi_graphs.x.type(torch.float32)
@@ -172,7 +175,18 @@ class SlideGraphArch(nn.Module):
         optimizer.zero_grad()
 
         wsi_output, _ = model(wsi_graphs)
-        loss = torch.nn.functional.cross_entropy(wsi_output, wsi_labels)
+
+        if model.CLASSIFICATION_TYPE == "multilabel":
+            pred = torch.nn.functional.softmax(wsi_output.type(torch.float32))
+            wsi_labels = wsi_labels.type(torch.float32)
+
+            # print(pred.shape, wsi_labels.shape)
+            # print("aaaaaaaaaaaaaa", pred.shape, wsi_labels.shape)
+
+            loss = torch.nn.functional.binary_cross_entropy(pred, wsi_labels)
+        else:
+            loss = torch.nn.functional.cross_entropy(wsi_output, wsi_labels)
+
 
         # Backprop and update
         loss.backward()
@@ -193,6 +207,7 @@ class SlideGraphArch(nn.Module):
         """Model inference."""
         device = select_device(on_gpu=on_gpu)
         wsi_graphs = batch_data["graph"].to(device)
+        wsi_labels = batch_data["label"].to(device)
         model = model.to(device)
 
         # Data type conversion
@@ -204,182 +219,20 @@ class SlideGraphArch(nn.Module):
         with torch.inference_mode():
             wsi_output, _ = model(wsi_graphs)
 
-        wsi_output = wsi_output.cpu().numpy()
-        # predict label
-        wsi_output = np.argmax(wsi_output, axis=1)
+        
+        if model.CLASSIFICATION_TYPE == "multilabel":
+            # wsi_output = torch.nn.functional.softmax(wsi_output.type(torch.float32)).cpu().numpy()
+            wsi_output = wsi_output.type(torch.float32).cpu().numpy()
+
+            wsi_labels = wsi_labels.type(torch.float32).cpu().numpy()
+        else:
+            wsi_output = wsi_output.cpu().numpy()
+            wsi_output = np.argmax(wsi_output, axis=1)
+            wsi_labels = wsi_labels.type(torch.float32).cpu().numpy()
 
         # Output should be a single tensor or scalar
         if "label" in batch_data:
-            wsi_labels = batch_data["label"]
-            wsi_labels = wsi_labels.cpu().numpy()
+            # wsi_labels = batch_data["label"]
+            # wsi_labels = wsi_labels.cpu().numpy()
             return wsi_output, wsi_labels
         return [wsi_output]
-
-
-# import torch
-# import torch.nn as nn
-# from torch_geometric.nn import GINConv, EdgeConv
-
-# class SlideGraphArch(nn.Module):
-#     def __init__(
-#         self: nn.Module,
-#         dim_features: int,
-#         dim_target: int,
-#         layers: "tuple[int, int]",
-#         pooling: str = "max",
-#         dropout: int = 0.0,
-#         conv: str = "GINConv",
-#         *,
-#         gembed: bool = False,
-#         **kwargs: dict,
-#     ) -> None:
-#         super(SlideGraphArch, self).__init__()
-
-#         # First hidden layer
-#         self.first_h = nn.Sequential(
-#             nn.Linear(in_features=128, out_features=64),
-#             nn.BatchNorm1d(64),
-#             nn.ReLU()
-#         )
-
-#         # Nearest neighbors layers
-#         self.nns = nn.ModuleList([
-#             nn.Sequential(
-#                 nn.Linear(in_features=64, out_features=32),
-#                 nn.BatchNorm1d(32),
-#                 nn.ReLU()
-#             ),
-#             nn.Sequential(
-#                 nn.Linear(in_features=32, out_features=32),
-#                 nn.BatchNorm1d(32),
-#                 nn.ReLU()
-#             ),
-#             nn.Sequential(
-#                 nn.Linear(in_features=32, out_features=16),
-#                 nn.BatchNorm1d(16),
-#                 nn.ReLU()
-#             )
-#         ])
-
-#         # Graph convolution layers
-#         self.convs = nn.ModuleList([
-#             EdgeConv(nn.Sequential(
-#                 nn.Linear(in_features=64, out_features=32),
-#                 nn.BatchNorm1d(32),
-#                 nn.ReLU()
-#             )),
-#             EdgeConv(nn.Sequential(
-#                 nn.Linear(in_features=32, out_features=32),
-#                 nn.BatchNorm1d(32),
-#                 nn.ReLU()
-#             )),
-#             EdgeConv(nn.Sequential(
-#                 nn.Linear(in_features=32, out_features=16),
-#                 nn.BatchNorm1d(16),
-#                 nn.ReLU()
-#             ))
-#         ])
-
-#         # Linear layers
-#         self.linears = nn.ModuleList([
-#             nn.Linear(in_features=64, out_features=3),
-#             nn.Linear(in_features=32, out_features=3),
-#             nn.Linear(in_features=32, out_features=3),
-#             nn.Linear(in_features=16, out_features=3)
-#         ])
-
-#     def forward(
-#         self: nn.Module,
-#         data: torch.Tensor,
-#     ) -> "tuple[torch.Tensor, torch.Tensor]":
-#         """Torch model forward function."""
-#         x, edge_index, batch = (
-#             data.x,
-#             data.edge_index.type(torch.int64),
-#             data.batch,
-#         )
-
-#     # def forward(self, x, edge_index):
-#         # Apply the first hidden layer
-#         x = self.first_h(x)
-
-#         # Apply nearest neighbors layers
-#         for i in range(len(self.nns)):
-#             x = self.nns[i](x)
-
-#         # Apply graph convolution layers
-#         for i in range(len(self.convs)):
-#             x = self.convs[i](x, edge_index)
-
-#         # Apply linear layers
-#         for i in range(len(self.linears)):
-#             x = self.linears[i](x)
-
-#         return x
-    
-
-#     # Run one single step
-#     @staticmethod
-#     def train_batch(
-#         model: nn.Module,
-#         batch_data: torch.Tensor,
-#         optimizer: torch.optim.Optimizer,
-#         on_gpu: bool = False,
-#     ) -> list:
-#         """Helper function for model training."""
-#         device = select_device(on_gpu=on_gpu)
-#         wsi_graphs = batch_data["graph"].to(device)
-#         wsi_labels = batch_data["label"].to(device)
-#         model = model.to(device)
-
-#         # Data type conversion
-#         wsi_graphs.x = wsi_graphs.x.type(torch.float32)
-
-#         # Not an RNN so does not accumulate
-#         model.train()
-#         optimizer.zero_grad()
-
-#         wsi_output, _ = model(wsi_graphs)
-#         loss = torch.nn.functional.cross_entropy(wsi_output, wsi_labels)
-
-#         # Backprop and update
-#         loss.backward()
-#         optimizer.step()
-
-#         loss = loss.detach().cpu().numpy()
-#         assert not np.isnan(loss)  # noqa: S101
-#         wsi_labels = wsi_labels.cpu().numpy()
-#         return [loss, wsi_output, wsi_labels]
-
-#     # Run one inference step
-#     @staticmethod
-#     def infer_batch(
-#         model: nn.Module,
-#         batch_data: torch.Tensor,
-#         on_gpu: bool = False,
-#     ) -> list:
-#         """Model inference."""
-#         device = select_device(on_gpu=on_gpu)
-#         wsi_graphs = batch_data["graph"].to(device)
-#         model = model.to(device)
-
-#         # Data type conversion
-#         wsi_graphs.x = wsi_graphs.x.type(torch.float32)
-
-#         # Inference mode
-#         model.eval()
-#         # Do not compute the gradient (not training)
-#         with torch.inference_mode():
-#             wsi_output, _ = model(wsi_graphs)
-
-#         wsi_output = wsi_output.cpu().numpy()
-#         # predict label
-#         wsi_output = np.argmax(wsi_output, axis=1)
-
-#         # Output should be a single tensor or scalar
-#         if "label" in batch_data:
-#             wsi_labels = batch_data["label"]
-#             wsi_labels = wsi_labels.cpu().numpy()
-#             return wsi_output, wsi_labels
-#         return [wsi_output]
-

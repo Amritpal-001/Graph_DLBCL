@@ -38,7 +38,7 @@ from tiatoolbox.utils.misc import save_as_json
 
 
 from src.utils import load_json, rm_n_mkdir, mkdir, recur_find_ext
-from src.dset import SlideGraphDataset, stratified_split, StratifiedSampler
+from src.dset import SlideGraphDataset, stratified_split, StratifiedSampler, StratifiedSampler_multilabel
 from src.model import SlideGraphArch
 from src.utils import ScalarMovingAverage
 
@@ -47,6 +47,35 @@ mpl.rcParams["figure.dpi"] = 300  # for high resolution figure in notebook
 
 
 nodes_preproc_func = None
+
+
+import numpy as np
+
+def multilabel_accuracy(y_pred, y_true):
+    """
+    Calculate multilabel classification metrics.
+
+    Parameters:
+    - y_true: 2D array-like or binary indicator matrix, true labels
+    - y_pred: 2D array-like or binary indicator matrix, predicted labels
+
+    Returns:
+    - overall_accuracy: Subset accuracy (exact match ratio)
+    - label_accuracies: List of accuracies for each individual label
+    """
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    y_pred[y_pred > 0.5] = 1
+    y_pred[y_pred < 0.5] = 0
+
+    # Ensure the shapes are the same
+    if y_true.shape != y_pred.shape:
+        raise ValueError("Shapes of y_true and y_pred must be the same.")
+    
+    label_accuracies = np.mean(y_true == y_pred, axis=0).round(4)
+    overall_accuracy = np.mean(label_accuracies).round(4)
+
+    return overall_accuracy, label_accuracies
 
 def run_once(  # noqa: C901, PLR0912, PLR0915
     dataset_dict: dict,
@@ -58,7 +87,8 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
     optim_kwargs: dict | None = None,
     *,
     on_gpu: bool = True,
-    GRAPH_DIR = None
+    GRAPH_DIR = None,
+    LABEL_TYPE = None
 ) -> list:
     """Running the inference or training loop once.
 
@@ -99,10 +129,16 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
         batch_sampler = None
         if subset_name == "train":
             _loader_kwargs = {}
-            batch_sampler = StratifiedSampler(
-                labels=[v[1] for v in subset],
-                batch_size=loader_kwargs["batch_size"],
-            )
+            if LABEL_TYPE == 'multilabel':
+                batch_sampler = StratifiedSampler_multilabel(
+                    labels=[v[1] for v in subset],
+                    batch_size=loader_kwargs["batch_size"],
+                )
+            else:
+                batch_sampler = StratifiedSampler(
+                    labels=[v[1] for v in subset],
+                    batch_size=loader_kwargs["batch_size"],
+                )
 
         ds = SlideGraphDataset(subset, mode=subset_name, preproc=nodes_preproc_func, graph_dir=GRAPH_DIR)
         loader_dict[subset_name] = DataLoader(
@@ -146,7 +182,7 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
             
             if loader_name == "train":
                 for val_name, val in ema.tracking_dict.items():
-                    logging_dict[f"train-EMA-{val_name}"] = val
+                    logging_dict[f"train-EMA-{val_name}"] = val.item()
             elif "infer" in loader_name and any(v in loader_name for v in ["train", "valid"]):
                 # Expand the list of N dataset size x H heads
                 # back to a list of H Head each with N samples.
@@ -155,9 +191,17 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                 pred = np.squeeze(np.array(pred))
                 gtruth = np.squeeze(np.array(gtruth))
 
-                # logging_dict[f"{loader_name}-microf1"] = metrics.f1_score(pred, gtruth, average='micro')
-                curr_score = metrics.accuracy_score(pred, gtruth)
-                logging_dict[f"{loader_name}-accuracy"] = curr_score
+                if LABEL_TYPE == 'multilabel':
+                    # print(pred, gtruth)
+                    curr_score, label_accuracies = multilabel_accuracy(pred, gtruth)
+                    logging_dict[f"{loader_name}-accuracy"] = float(curr_score)
+                    print(loader_name , "label_accuracies" , label_accuracies)
+                    # logging_dict[f"{loader_name}-individual_accuracy"] = float(label_accuracies)
+                else:
+                    # logging_dict[f"{loader_name}-microf1"] = metrics.f1_score(pred, gtruth, average='micro')
+                    curr_score = round(metrics.accuracy_score(pred, gtruth),3)
+                    logging_dict[f"{loader_name}-accuracy"] = float(curr_score)
+
                 try:
                     if curr_score >= best_score[f"{loader_name}-accuracy"]:
                         best_score[f"{loader_name}-accuracy"] = curr_score
@@ -180,6 +224,7 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                 # Save a backup first
                 save_as_json(old_stats, save_dir/"stats.old.json", exist_ok=True)
                 new_stats = copy.deepcopy(old_stats)
+                # new_stats = {int(k.value()): v for k, v in new_stats.items()}
                 new_stats = {int(k): v for k, v in new_stats.items()}
 
             old_epoch_stats = {}
@@ -193,6 +238,7 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
         for pkey in new_stats[0].keys():
             vals = [new_stats[eitr][pkey] for eitr in range(epoch+1)]
             plt.plot(np.arange(len(vals)), vals, label=pkey)
+        plt.title("Best_acc" + str(list(best_score.values())))
         plt.tight_layout()
         plt.legend()
         plt.savefig(save_dir/'progress.png')

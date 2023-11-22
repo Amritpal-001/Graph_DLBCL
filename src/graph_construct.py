@@ -20,6 +20,7 @@ from matplotlib import pyplot as plt
 
 SKEW_NOISE  = 0.0001
 
+
 def get_pids_labels_for_key(df, key='OS', nclasses=3, idkey='patient_id'):
     ckey = key+'_class'
     df = df[[idkey, key]]
@@ -31,6 +32,21 @@ def get_pids_labels_for_key(df, key='OS', nclasses=3, idkey='patient_id'):
         sepmask = df[key] > sepval
         df.loc[sepmask, ckey] = isep
     return df
+
+
+def get_pids_multilabels_for_key(df, key_list, nclasses=3, idkey='patient_id'):
+    df = df[[idkey]+ key_list]
+
+    for key in key_list:
+        ckey = key+'_class'
+        df[ckey] = int(0)
+        separators = np.linspace(0, 1, nclasses+1)[0:-1]
+        for isep, sep in enumerate(separators):
+            sepval = df[key].quantile(sep)
+            sepmask = df[key] > sepval
+            df.loc[sepmask, ckey] = isep
+    return df
+
 
 def get_overall_statistics(features):
     overall_mean = np.mean(features, axis=0).tolist()

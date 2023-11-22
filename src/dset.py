@@ -78,6 +78,98 @@ class SlideGraphDataset(Dataset):
         return self.__getitem__(idx)
 
 
+# def stratified_split(
+#     x: list,
+#     y: list,
+#     train: float,
+#     valid: float,
+#     test: float,
+#     num_folds: int,
+#     seed: int = 5,
+# ) -> list:
+#     """Helper to generate stratified splits.
+
+#     Split `x` and `y` in to N number of `num_folds` sets
+#     of `train`, `valid`, and `test` set in stratified manner.
+#     `train`, `valid`, and `test` are guaranteed to be mutually
+#     exclusive.
+
+#     Args:
+#         x (list, np.ndarray):
+#             List of samples.
+#         y (list, np.ndarray):
+#             List of labels, each value is the value
+#             of the sample at the same index in `x`.
+#         train (float):
+#             Percentage to be used for training set.
+#         valid (float):
+#             Percentage to be used for validation set.
+#         test (float):
+#             Percentage to be used for testing set.
+#         num_folds (int):
+#             Number of split generated.
+#         seed (int):
+#             Random seed. Default=5.
+
+#     Returns:
+#         A list of splits where each is a dictionary of
+#         {
+#             'train': [(sample_A, label_A), (sample_B, label_B), ...],
+#             'valid': [(sample_C, label_C), (sample_D, label_D), ...],
+#             'test' : [(sample_E, label_E), (sample_E, label_E), ...],
+#         }
+
+#     """
+#     assert (  # noqa: S101
+#         train + valid + test - 1.0 < 1.0e-10  # noqa: PLR2004
+#     ), "Ratios must sum to 1.0 ."
+
+#     outer_splitter = StratifiedShuffleSplit(
+#         n_splits=num_folds,
+#         train_size=train + valid,
+#         random_state=seed,
+#     )
+#     inner_splitter = StratifiedShuffleSplit(
+#         n_splits=1,
+#         train_size=train / (train + valid),
+#         random_state=seed,
+#     )
+
+#     x = np.array(x)
+#     y = np.array(y)
+#     splits = []
+#     for train_valid_idx, test_idx in outer_splitter.split(x, y):
+#         test_x = x[test_idx]
+#         test_y = y[test_idx]
+
+#         # Holder for train_valid set
+#         x_ = x[train_valid_idx]
+#         y_ = y[train_valid_idx]
+
+#         # Split train_valid into train and valid set
+#         train_idx, valid_idx = next(iter(inner_splitter.split(x_, y_)))
+#         valid_x = x_[valid_idx]
+#         valid_y = y_[valid_idx]
+
+#         train_x = x_[train_idx]
+#         train_y = y_[train_idx]
+
+#         # Integrity check
+#         assert len(set(train_x).intersection(set(valid_x))) == 0  # noqa: S101
+#         assert len(set(valid_x).intersection(set(test_x))) == 0  # noqa: S101
+#         assert len(set(train_x).intersection(set(test_x))) == 0  # noqa: S101
+
+#         splits.append(
+#             {
+#                 "train": list(zip(train_x, train_y)),
+#                 "valid": list(zip(valid_x, valid_y)),
+#                 "test": list(zip(test_x, test_y)),
+#             },
+#         )
+#     return splits
+
+
+
 def stratified_split(
     x: list,
     y: list,
@@ -138,7 +230,7 @@ def stratified_split(
     x = np.array(x)
     y = np.array(y)
     splits = []
-    for train_valid_idx, test_idx in outer_splitter.split(x, y):
+    for train_valid_idx, test_idx in outer_splitter.split(x, y[:,0]):
         test_x = x[test_idx]
         test_y = y[test_idx]
 
@@ -147,7 +239,98 @@ def stratified_split(
         y_ = y[train_valid_idx]
 
         # Split train_valid into train and valid set
-        train_idx, valid_idx = next(iter(inner_splitter.split(x_, y_)))
+        train_idx, valid_idx = next(iter(inner_splitter.split(x_, y_[:,0])))
+        valid_x = x_[valid_idx]
+        valid_y = y_[valid_idx]
+
+        train_x = x_[train_idx]
+        train_y = y_[train_idx]
+
+        # Integrity check
+        assert len(set(train_x).intersection(set(valid_x))) == 0  # noqa: S101
+        assert len(set(valid_x).intersection(set(test_x))) == 0  # noqa: S101
+        assert len(set(train_x).intersection(set(test_x))) == 0  # noqa: S101
+
+        splits.append(
+            {
+                "train": list(zip(train_x, train_y[:,0])),
+                "valid": list(zip(valid_x, valid_y[:,0])),
+                "test": list(zip(test_x, test_y[:,0])),
+            },
+        )
+    return splits
+
+
+def multilabel_stratified_split(
+    x: list,
+    y: list,
+    train: float,
+    valid: float,
+    test: float,
+    num_folds: int,
+    seed: int = 5,
+) -> list:
+    """Helper to generate stratified splits.
+
+    Split `x` and `y` in to N number of `num_folds` sets
+    of `train`, `valid`, and `test` set in stratified manner.
+    `train`, `valid`, and `test` are guaranteed to be mutually
+    exclusive.
+
+    Args:
+        x (list, np.ndarray):
+            List of samples.
+        y (list, np.ndarray):
+            List of labels, each value is the value
+            of the sample at the same index in `x`.
+        train (float):
+            Percentage to be used for training set.
+        valid (float):
+            Percentage to be used for validation set.
+        test (float):
+            Percentage to be used for testing set.
+        num_folds (int):
+            Number of split generated.
+        seed (int):
+            Random seed. Default=5.
+
+    Returns:
+        A list of splits where each is a dictionary of
+        {
+            'train': [(sample_A, label_A), (sample_B, label_B), ...],
+            'valid': [(sample_C, label_C), (sample_D, label_D), ...],
+            'test' : [(sample_E, label_E), (sample_E, label_E), ...],
+        }
+
+    """
+    assert (  # noqa: S101
+        train + valid + test - 1.0 < 1.0e-10  # noqa: PLR2004
+    ), "Ratios must sum to 1.0 ."
+
+    outer_splitter = StratifiedShuffleSplit(
+        n_splits=num_folds,
+        train_size=train + valid,
+        random_state=seed,
+    )
+    inner_splitter = StratifiedShuffleSplit(
+        n_splits=1,
+        train_size=train / (train + valid),
+        random_state=seed,
+    )
+
+    x = np.array(x)
+    y = np.array(y)
+    splits = []
+    for train_valid_idx, test_idx in outer_splitter.split(x, y[:,0]):
+        test_x = x[test_idx]
+        test_y = y[test_idx]
+
+        # Holder for train_valid set
+        x_ = x[train_valid_idx]
+        y_ = y[train_valid_idx]
+
+        # Split train_valid into train and valid set
+        train_idx, valid_idx = next(iter(inner_splitter.split(x_, y_[:,0])))
         valid_x = x_[valid_idx]
         valid_y = y_[valid_idx]
 
@@ -210,3 +393,43 @@ class StratifiedSampler(Sampler):
 
         """
         return self.num_steps
+
+from sklearn.model_selection import StratifiedShuffleSplit
+from torch.utils.data import Sampler
+
+
+
+class StratifiedSampler_multilabel(Sampler):
+    """Sampling the dataset such that the batch contains stratified samples.
+
+    Args:
+        labels (list): List of labels, must be in the same ordering as input
+            samples provided to the `SlideGraphDataset` object.
+        batch_size (int): Size of the batch.
+
+    Returns:
+        List of indices to query from the `SlideGraphDataset` object.
+
+    """
+
+    def __init__(self, labels: list, batch_size: int = 10):
+        """Initialize StratifiedSampler."""
+        self.batch_size = batch_size
+        self.labels = np.array(labels)
+        self.sss = StratifiedShuffleSplit(n_splits=1, test_size=batch_size / len(labels), random_state=42)
+
+    def _sampling(self):
+        """Do we want to control randomness here."""
+        indices = np.arange(len(self.labels))
+        _, tidx = next(self.sss.split(indices, self.labels[:,0]))
+        # return array of arrays of indices in each batch
+        return [tidx]
+
+    def __iter__(self):
+        """Define Iterator."""
+        return iter(self._sampling())
+
+    def __len__(self):
+        """The length of the sampler."""
+        return len(self.labels) // self.batch_size
+
