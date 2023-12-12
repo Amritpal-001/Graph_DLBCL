@@ -14,10 +14,13 @@ from tiatoolbox.utils.misc import select_device
 from torch_geometric.nn import (
     EdgeConv,
     GINConv,
+    GATv2Conv,
     global_add_pool,
     global_max_pool,
     global_mean_pool,
 )
+from torch_geometric.utils.num_nodes import maybe_num_nodes
+from torch_geometric.utils import subgraph
 
 class SlideGraphArch(nn.Module):
     """Define SlideGraph architecture."""
@@ -29,9 +32,11 @@ class SlideGraphArch(nn.Module):
         layers: "tuple[int, int]",
         pooling: str = "max",
         dropout: int = 0.0,
+        node_dropout: int = None,
         conv: str = "GINConv",
         *,
         gembed: bool = False,
+        pred_w_all=True,
         **kwargs: dict,
     ) -> None:
         """Initialize SlideGraphArch."""
@@ -39,6 +44,7 @@ class SlideGraphArch(nn.Module):
         if layers is None:
             layers = [6, 6]
         self.dropout = dropout
+        self.node_dropout = node_dropout
         self.embeddings_dim = layers
         self.num_layers = len(self.embeddings_dim)
         self.nns = []
@@ -52,8 +58,13 @@ class SlideGraphArch(nn.Module):
         # If True then learn a graph embedding for final classification
         # (classify pooled node features), otherwise pool node decision scores.
         self.gembed = gembed
+        self.pred_w_all = pred_w_all
 
-        conv_dict = {"GINConv": [GINConv, 1], "EdgeConv": [EdgeConv, 2]}
+        conv_dict = {
+            "GINConv": [GINConv, 1],
+            "EdgeConv": [EdgeConv, 2],
+            "GATv2Conv": [GATv2Conv, 2],
+        }
         if conv not in conv_dict:
             msg = f'Not support `conv="{conv}".'
             raise ValueError(msg)
@@ -73,10 +84,13 @@ class SlideGraphArch(nn.Module):
         input_emb_dim = out_emb_dim
         for out_emb_dim in self.embeddings_dim[1:]:
             conv_class, alpha = conv_dict[conv]
-            subnet = create_linear(alpha * input_emb_dim, out_emb_dim)
-            # ! this variable should be removed after training integrity checking
-            self.nns.append(subnet)  # <--| as it already within ConvClass
-            self.convs.append(conv_class(self.nns[-1], **kwargs))
+            if "GAT" in conv:
+                self.convs.append(conv_class(input_emb_dim, out_emb_dim, **kwargs))
+            else:
+                subnet = create_linear(alpha * input_emb_dim, out_emb_dim)
+                # ! this variable should be removed after training integrity checking
+                self.nns.append(subnet)  # <--| as it already within ConvClass
+                self.convs.append(conv_class(self.nns[-1], **kwargs))
             self.linears.append(Linear(out_emb_dim, dim_target))
             input_emb_dim = out_emb_dim
 
@@ -112,6 +126,17 @@ class SlideGraphArch(nn.Module):
             data.batch,
         )
 
+        if self.training and self.node_dropout is not None and self.node_dropout > 0.0:
+            # dropout nodes
+            num_nodes = maybe_num_nodes(edge_index)
+            dn_node_mask = torch.rand(num_nodes, device=edge_index.device) > self.node_dropout
+            # get edge_index relabeled with new node indices
+            dn_edge_index_relbl, _ = subgraph(dn_node_mask, edge_index, relabel_nodes=True)
+
+            feature = feature[dn_node_mask]
+            edge_index = dn_edge_index_relbl
+            batch = batch[dn_node_mask]
+
         wsi_prediction = 0
         pooling = self.pooling
         node_prediction = 0
@@ -127,7 +152,8 @@ class SlideGraphArch(nn.Module):
                     p=self.dropout,
                     training=self.training,
                 )
-                wsi_prediction += wsi_prediction_sub
+                if (layer == self.num_layers-1) or self.pred_w_all:
+                    wsi_prediction += wsi_prediction_sub
             else:
                 feature = self.convs[layer - 1](feature, edge_index)
                 if not self.gembed:
@@ -147,7 +173,8 @@ class SlideGraphArch(nn.Module):
                         p=self.dropout,
                         training=self.training,
                     )
-                wsi_prediction += wsi_prediction_sub
+                if (layer == self.num_layers-1) or self.pred_w_all:
+                    wsi_prediction += wsi_prediction_sub
         return wsi_prediction, node_prediction
 
     # Run one single step

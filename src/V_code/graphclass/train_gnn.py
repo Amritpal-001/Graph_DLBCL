@@ -38,34 +38,73 @@ from tiatoolbox.utils.misc import save_as_json
 from tiatoolbox.utils.misc import select_device
 
 from utils import load_json, rm_n_mkdir, mkdir, recur_find_ext
-from dset import SlideGraphDataset, stratified_split, StratifiedSampler
+from dset import SlideGraphDataset, stratified_split_train_test, StratifiedSampler
 from model import SlideGraphArch
 from utils import ScalarMovingAverage
 
 warnings.filterwarnings("ignore")
 mpl.rcParams["figure.dpi"] = 300  # for high resolution figure in notebook
 
-ON_GPU = False
+import argparse, sys
+from pprint import pprint
+parser = argparse.ArgumentParser()
+parser.add_argument('--seed', type=int, default=5)
+parser.add_argument('--on_gpu', type=int, default=0)
+parser.add_argument('--mode', type=str, default='resnet')
+parser.add_argument('--gembed', type=int, default=0)
+parser.add_argument('--conv', type=str, default='EdgeConv')
+parser.add_argument('--node_dropout', type=float, default=None)
+parser.add_argument('--pred_w_all', type=int, default=1)
+parser.add_argument('--lr', type=float, default=1e-3)
+parser.add_argument('--weight_decay', type=float, default=1e-4)
+args = parser.parse_args(sys.argv[1:])
+pprint(args.__dict__)
 
+ON_GPU = args.on_gpu
 device = select_device(on_gpu=ON_GPU)
 
-SEED = 5
+SEED = args.seed
 random.seed(SEED)
 rng = np.random.default_rng(SEED)
 torch.manual_seed(SEED)
 torch.cuda.manual_seed(SEED)
 
 WORKSPACE_DIR = Path("./workspace/ours")
-GRAPH_DIR = WORKSPACE_DIR / "graphs"
-LABELS_PATH = WORKSPACE_DIR / "graphs/0_labels.txt"
-NUM_EPOCHS = 100
-NUM_NODE_FEATURES = 128
+NUM_EPOCHS = 500
 NCLASSES = 3
 
-TRAIN_DIR = WORKSPACE_DIR / "training"
+if args.mode == 'resnet':
+    GRAPH_DIR = WORKSPACE_DIR / "graphs_resnet"
+    TRAIN_DIR = WORKSPACE_DIR / "training_resnet"
+    NUM_NODE_FEATURES = 2048
+elif args.mode == 'int':
+    GRAPH_DIR = WORKSPACE_DIR / "graphs_int"
+    TRAIN_DIR = WORKSPACE_DIR / "training_int"
+    NUM_NODE_FEATURES = 128
+elif args.mode == 'int_cnt':
+    GRAPH_DIR = WORKSPACE_DIR / "graphs_int_cnt"
+    TRAIN_DIR = WORKSPACE_DIR / "training_int_cnt"
+    NUM_NODE_FEATURES = 128+1
+elif args.mode == 'int_cnt_cmp':
+    GRAPH_DIR = WORKSPACE_DIR / "graphs_int_cnt_cmp"
+    TRAIN_DIR = WORKSPACE_DIR / "training_int_cnt_cmp"
+    NUM_NODE_FEATURES = 128+1+5
+elif args.mode == 'int_cnt_proj':
+    GRAPH_DIR = WORKSPACE_DIR / "graphs_int_cnt_proj"
+    TRAIN_DIR = WORKSPACE_DIR / "training_int_cnt_proj"
+    NUM_NODE_FEATURES = 128+32
+elif args.mode == 'int_cnt_cmp_proj':
+    GRAPH_DIR = WORKSPACE_DIR / "graphs_int_cnt_cmp_proj"
+    TRAIN_DIR = WORKSPACE_DIR / "training_int_cnt_cmp_proj"
+    NUM_NODE_FEATURES = 128+32
+else:
+    raise NotImplementedError(args.mode)
+
+LABELS_PATH = GRAPH_DIR / "0_labels.txt"
 SPLIT_PATH = TRAIN_DIR / "splits.dat"
 RUN_OUTPUT_DIR = TRAIN_DIR / f"session_{datetime.now().strftime('%m_%d_%H_%M_%S')}"
 RUN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+save_as_json(args.__dict__, f'{RUN_OUTPUT_DIR}/args.json')
 MODEL_DIR = RUN_OUTPUT_DIR / "model"
 
 wsi_paths = recur_find_ext(GRAPH_DIR, [".json"])
@@ -74,8 +113,8 @@ assert len(wsi_paths) > 0, "No files found."  # noqa: S101
 
 NUM_FOLDS = 1
 TEST_RATIO = 0.2
-TRAIN_RATIO = 0.8 * 0.9
-VALID_RATIO = 0.8 * 0.1
+TRAIN_RATIO = 0.8 * 1.0
+VALID_RATIO = 0.8 * 0.0
 
 if SPLIT_PATH and SPLIT_PATH.exists():
     splits = joblib.load(SPLIT_PATH)
@@ -86,7 +125,8 @@ else:
     y = np.array([
         labels_dict[wsi_name+'.json'] for wsi_name in wsi_names
     ])
-    splits = stratified_split(x, y, TRAIN_RATIO, VALID_RATIO, TEST_RATIO, NUM_FOLDS)
+    # splits = stratified_split(x, y, TRAIN_RATIO, VALID_RATIO, TEST_RATIO, NUM_FOLDS)
+    splits = stratified_split_train_test(x, y, TRAIN_RATIO, TEST_RATIO, NUM_FOLDS)
     joblib.dump(splits, SPLIT_PATH)
 
 # # we must define the function after training/loading
@@ -94,6 +134,29 @@ else:
 #     """Pre-processing function for nodes."""
 #     return node_scaler.transform(node_features)
 nodes_preproc_func = None
+
+def make_fig_with_new_stats(new_stats, epoch, figpath):
+    fig, axes_all = plt.subplots(2, 1, figsize=(7.5, 10))
+    # loss
+    axes_all[0].set_ylim(0.0001, 1.5)
+    axes_all[0].grid(visible=True)
+    # accuracy
+    axes_all[1].set_ylim(0.2, 1.1)
+    axes_all[1].grid(visible=True)
+    ax_curr = None
+    for pkey in new_stats[0].keys():
+        if 'loss' in pkey:
+            ax_curr = axes_all[0]
+        elif 'accuracy' in pkey:
+            ax_curr = axes_all[1]
+        else:
+            continue
+        vals = [new_stats[eitr][pkey] for eitr in range(epoch+1)]
+        ax_curr.plot(np.arange(len(vals)), vals, label=pkey)
+    fig.tight_layout()
+    fig.legend()
+    plt.savefig(figpath)
+    plt.close()
 
 def run_once(  # noqa: C901, PLR0912, PLR0915
     dataset_dict: dict,
@@ -194,7 +257,7 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                 pred = np.squeeze(np.array(pred))
                 gtruth = np.squeeze(np.array(gtruth))
 
-                logging_dict[f"{loader_name}-microf1"] = metrics.f1_score(pred, gtruth, average='micro')
+                # logging_dict[f"{loader_name}-microf1"] = metrics.f1_score(pred, gtruth, average='micro')
                 logging_dict[f"{loader_name}-accuracy"] = metrics.accuracy_score(pred, gtruth)
                 # logging_dict[f"{loader_name}-raw-pred"] = pred
                 # logging_dict[f"{loader_name}-raw-gtruth"] = gtruth
@@ -222,16 +285,9 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
             new_stats[epoch] = old_epoch_stats
             save_as_json(new_stats, save_dir/"stats.json", exist_ok=True)
 
-        plt.figure()
-        for pkey in new_stats[0].keys():
-            vals = [new_stats[eitr][pkey] for eitr in range(epoch+1)]
-            plt.plot(np.arange(len(vals)), vals, label=pkey)
-        plt.tight_layout()
-        plt.legend()
-        plt.savefig(save_dir/'progress.png')
-        plt.close()
+        make_fig_with_new_stats(new_stats, epoch, save_dir/'progress.png')
 
-        if epoch % 25 == 0:
+        if epoch % 50 == 0:
             # Save the pytorch model
             model.save(
                 f"{save_dir}/epoch={epoch:03d}.weights.pth",
@@ -268,12 +324,27 @@ arch_kwargs = {
     "layers": [16, 16, 8],
     "dropout": 0.5,
     "pooling": "mean",
-    "conv": "EdgeConv",
     "aggr": "max",
+    # "gembed": False,
+    # "gembed": True,
+    "gembed": args.gembed,
+    # "conv": "EdgeConv",
+    # "conv": "GATv2Conv"
+    "conv": args.conv,
+    # "node_dropout": None,
+    # "node_dropout": 0.5,
+    "node_dropout": args.node_dropout,
+    # "pred_w_all": True,
+    # "pred_w_all": False,
+    "pred_w_all": args.pred_w_all,
 }
 optim_kwargs = {
-    "lr": 1.0e-3,
-    "weight_decay": 1.0e-4,
+    # "lr": 1.0e-3,
+    # "lr": 1.0e-3,
+    "lr": args.lr,
+    # "weight_decay": 1.0e-4,
+    # "weight_decay": 1.0e-3,
+    "weight_decay": args.weight_decay,
 }
 
 if not MODEL_DIR.exists() or True:
@@ -281,7 +352,7 @@ if not MODEL_DIR.exists() or True:
         new_split = {
             "train": split["train"],
             "infer-train": split["train"],
-            "infer-valid-A": split["valid"],
+            # "infer-valid-A": split["valid"],
             "infer-valid-B": split["test"],
         }
         split_save_dir = MODEL_DIR/f"{split_idx:02d}/"

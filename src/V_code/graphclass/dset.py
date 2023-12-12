@@ -169,6 +169,44 @@ def stratified_split(
     return splits
 
 
+def stratified_split_train_test(
+    x: list,
+    y: list,
+    train: float,
+    test: float,
+    num_folds: int,
+    seed: int = 5,
+) -> list:
+    assert (  # noqa: S101
+        train + test - 1.0 < 1.0e-10  # noqa: PLR2004
+    ), "Ratios must sum to 1.0 ."
+
+    outer_splitter = StratifiedShuffleSplit(
+        n_splits=num_folds,
+        train_size=train,
+        random_state=seed,
+    )
+
+    x = np.array(x)
+    y = np.array(y)
+    splits = []
+    for train_idx, test_idx in outer_splitter.split(x, y):
+        test_x = x[test_idx]
+        test_y = y[test_idx]
+
+        # Holder for train_valid set
+        train_x = x[train_idx]
+        train_y = y[train_idx]
+
+        splits.append(
+            {
+                "train": list(zip(train_x, train_y)),
+                "test": list(zip(test_x, test_y)),
+            },
+        )
+    return splits
+
+
 class StratifiedSampler(Sampler):
     """Sampling the dataset such that the batch contains stratified samples.
 

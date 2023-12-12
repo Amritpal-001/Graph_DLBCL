@@ -24,12 +24,26 @@ CLINPATH = f'{BASEDIR}/clinical_data_cleaned.csv'
 ANNPATH = f'{BASEDIR}/annotations_clean.csv'
 FEATSDIR = f'{BASEDIR}/feats'
 FEATSCALERPATH = f"{FEATSDIR}/0_feat_scaler.npz"
-GRAPHSDIR = f'{BASEDIR}/graphs'
-LABELSPATH = f'{BASEDIR}/graphs/0_labels.txt'
+
+INCLUDE_TOTAL_COUNT = True
+INCLUDE_COMPOSITION = True
+PROJECT_COUNTS = True
+
 PATCH_SIZE = 300
 SKEW_NOISE = 0.0001
 MIN_CELLS_PER_PATCH = 2
 CONNECTIVITY_DISTANCE = 500
+NUM_CELL_TYPES = 5
+COUNT_PROJECT_SIZE = 32
+COUNT_PROJECT_MATRIX = None
+
+# GRAPHSDIR = f'{BASEDIR}/graphs_int'
+# GRAPHSDIR = f'{BASEDIR}/graphs_int_cnt'
+# GRAPHSDIR = f'{BASEDIR}/graphs_int_cnt_cmp'
+# GRAPHSDIR = f'{BASEDIR}/graphs_int_cnt_proj'
+GRAPHSDIR = f'{BASEDIR}/graphs_int_cnt_cmp_proj'
+LABELSPATH = f'{GRAPHSDIR}/0_labels.txt'
+
 
 global_patch_stats = []
 
@@ -61,7 +75,7 @@ def get_overall_statistics(features):
 
 def get_patch_pooled_positions_features(celldatadict, patch_size, cell_feat_norm_stats):
 
-    global global_patch_stats
+    global global_patch_stats, COUNT_PROJECT_MATRIX
 
     _cellfeats_gmean, _cellfeats_gvar = cell_feat_norm_stats
     cf_gmean = np.expand_dims(_cellfeats_gmean, axis=0)
@@ -88,15 +102,34 @@ def get_patch_pooled_positions_features(celldatadict, patch_size, cell_feat_norm
             # if patch has less than eq 1 cell, skip creating it 
             if len(patch_cids) <= MIN_CELLS_PER_PATCH:
                 continue
-
             global_patch_stats.append(len(patch_cids))
 
             patch_cellposs = np.array([celldatadict[cellid]['centroid'] for cellid in patch_cids])
+            patch_position = np.mean(patch_cellposs, axis=0)
+
             patch_cellfeats_raw = np.array([celldatadict[cellid]['intensity_feats'] for cellid in patch_cids])
             patch_cellfeats = (patch_cellfeats_raw - cf_gmean) / cf_gstd
-
-            patch_position = np.mean(patch_cellposs, axis=0)
             patch_features = np.array(get_overall_statistics(patch_cellfeats))
+
+            # add count/composition features and optionally project them
+            if INCLUDE_TOTAL_COUNT or INCLUDE_COMPOSITION:
+
+                patch_cell_counts = [celldatadict[cellid]['type'] for cellid in patch_cids]
+                uids, freqs = np.unique(patch_cell_counts, return_counts=True)
+                holder = np.zeros(NUM_CELL_TYPES, dtype=np.float32)
+                holder[uids.astype(int)] = freqs
+
+                patch_count_features = []
+                if INCLUDE_TOTAL_COUNT:
+                    patch_count_features.append([holder.sum()])
+                if INCLUDE_COMPOSITION:
+                    patch_count_features.append(holder)
+                patch_count_features = np.concatenate(patch_count_features)
+
+                if PROJECT_COUNTS:
+                    patch_count_features = np.matmul(patch_count_features, COUNT_PROJECT_MATRIX)
+                
+                patch_features = np.concatenate([patch_features, patch_count_features])
 
             patches_list_position.append(patch_position)
             patches_list_features.append(patch_features)
@@ -116,6 +149,12 @@ def simple_delaunay(point_centroids, feature_centroids, connectivity_distance=40
     }
 
 def create_graph_with_pooled_patch_nodes(featpaths, labels, outgraphpaths, patch_size, cell_feat_norm_stats):
+
+    global INCLUDE_TOTAL_COUNT, INCLUDE_COMPOSITION, NUM_CELL_TYPES
+    global PROJECT_COUNTS, COUNT_PROJECT_SIZE, COUNT_PROJECT_MATRIX
+    if (INCLUDE_TOTAL_COUNT or INCLUDE_COMPOSITION) and PROJECT_COUNTS:
+        inputsize = INCLUDE_TOTAL_COUNT*1 + INCLUDE_COMPOSITION*NUM_CELL_TYPES
+        COUNT_PROJECT_MATRIX = np.random.randn(inputsize, COUNT_PROJECT_SIZE)*0.1
 
     def process_per_file_group(idx):
         featpath = featpaths[idx]
@@ -150,43 +189,44 @@ def create_graph_with_pooled_patch_nodes(featpaths, labels, outgraphpaths, patch
     #     for fidx in tqdm(range(len(featpaths)), disable=False)
     # ]
 
-# divide into quantiles
-df = pd.read_csv(CLINPATH)
-df_labels = get_pids_labels_for_key(df, key='OS', nclasses=3)
+if __name__ == "__main__":
+    # divide into quantiles
+    df = pd.read_csv(CLINPATH)
+    df_labels = get_pids_labels_for_key(df, key='OS', nclasses=3)
 
-# save paths
-featpaths = np.sort(glob.glob(f'{FEATSDIR}/*.dat'))
-pids = [int(osp.basename(featpath).split('_')[0]) for featpath in featpaths]
-df_featpaths = pd.DataFrame(zip(pids, featpaths), columns=['patient_id', 'featpath'])
+    # save paths
+    featpaths = np.sort(glob.glob(f'{FEATSDIR}/*.dat'))
+    pids = [int(osp.basename(featpath).split('_')[0]) for featpath in featpaths]
+    df_featpaths = pd.DataFrame(zip(pids, featpaths), columns=['patient_id', 'featpath'])
 
-# merge to find datapoints with graph data and labels
-df_data = df_featpaths.merge(df_labels, on='patient_id')
-# df_data = df_data[:12]
+    # merge to find datapoints with graph data and labels
+    df_data = df_featpaths.merge(df_labels, on='patient_id')
+    # df_data = df_data[:12]
 
-featpaths_data = df_data['featpath'].to_list()
-labels_data = df_data['OS_class'].to_list()
-outgraphpaths_data = [f"{GRAPHSDIR}/{osp.basename(featpath).split('.')[0]}.json" for featpath in featpaths_data]
+    featpaths_data = df_data['featpath'].to_list()
+    labels_data = df_data['OS_class'].to_list()
+    outgraphpaths_data = [f"{GRAPHSDIR}/{osp.basename(featpath).split('.')[0]}.json" for featpath in featpaths_data]
 
-# save labels
-labels_dict = {osp.basename(graphpath): label for graphpath, label in zip(outgraphpaths_data, labels_data)}
-with open(LABELSPATH, 'w') as f:
-    json.dump(labels_dict, f)
+    # read normalizer stats from file and pass to fn
+    dd = np.load(FEATSCALERPATH)
+    cell_feat_norm_stats = (dd['mean'], dd['var'])
 
-# read normalizer stats from file and pass to fn
-dd = np.load(FEATSCALERPATH)
-cell_feat_norm_stats = (dd['mean'], dd['var'])
+    # create final graphs data
+    # shutil.rmtree(GRAPHSDIR)
+    if not osp.exists(GRAPHSDIR):
+        os.makedirs(GRAPHSDIR)
+        create_graph_with_pooled_patch_nodes(
+            featpaths_data,
+            labels_data,
+            outgraphpaths_data,
+            PATCH_SIZE,
+            cell_feat_norm_stats=cell_feat_norm_stats,
+        )
 
-# create final graphs data
-# shutil.rmtree(GRAPHSDIR)
-if not osp.exists(GRAPHSDIR):
-    os.makedirs(GRAPHSDIR)
-    create_graph_with_pooled_patch_nodes(
-        featpaths_data,
-        labels_data,
-        outgraphpaths_data,
-        PATCH_SIZE,
-        cell_feat_norm_stats=cell_feat_norm_stats,
-    )
+        # wont work in parallel mode
+        # print(np.mean(global_patch_stats), np.std(global_patch_stats))
 
-    # wont work in parallel mode
-    # print(np.mean(global_patch_stats), np.std(global_patch_stats))
+        # save labels
+        labels_dict = {osp.basename(graphpath): label for graphpath, label in zip(outgraphpaths_data, labels_data)}
+        with open(LABELSPATH, 'w') as f:
+            json.dump(labels_dict, f)
