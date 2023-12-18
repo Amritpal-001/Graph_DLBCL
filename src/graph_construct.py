@@ -153,3 +153,44 @@ def create_graph_with_pooled_patch_nodes(featpaths, labels, outgraphpaths, patch
     )
     # for fidx in tqdm(range(len(featpaths)), disable=False):
     #     process_per_file_group(fidx)
+
+
+def create_graph_with_pooled_patch_nodes_with_survival_data(featpaths, labels, survival_events, survival_time, outgraphpaths, patch_size, cell_feat_norm_stats , MIN_CELLS_PER_PATCH, CONNECTIVITY_DISTANCE):
+
+    def process_per_file_group(idx):
+        featpath = featpaths[idx]
+        label = labels[idx]
+        surv_event =survival_events[idx]
+        surv_time =survival_time[idx]
+
+        outgraphpath = outgraphpaths[idx]
+
+        celldatadict = joblib.load(featpath)
+        positions, features = get_patch_pooled_positions_features(celldatadict, patch_size, cell_feat_norm_stats,MIN_CELLS_PER_PATCH)
+
+        # graph cannot be constructed with only four patches
+        try:
+            graph_dict = simple_delaunay(
+                positions[:, :2],
+                features,
+                connectivity_distance=CONNECTIVITY_DISTANCE,
+            )
+        except Exception as e:
+            print('Skipping', featpath, 'due to', e)
+        else:
+            # Write a graph to a JSON file
+            with open(outgraphpath, 'w+') as handle:
+                # print(outgraphpath)
+                graph_dict = {k: v.tolist() for k, v in graph_dict.items()}
+                graph_dict['y'] = label
+                graph_dict['surv_event'] = surv_event
+                graph_dict['surv_time'] = surv_time
+
+                json.dump(graph_dict, handle)
+
+    joblib.Parallel(4)(
+        joblib.delayed(process_per_file_group)(fidx)
+        for fidx in tqdm(range(len(featpaths)), disable=False)
+    )
+    # for fidx in tqdm(range(len(featpaths)), disable=False):
+    #     process_per_file_group(fidx)

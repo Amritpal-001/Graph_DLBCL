@@ -162,6 +162,7 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                     ema({"loss": outputs[0]})
                 else:
                     output = model.infer_batch(model, batch_data, on_gpu=on_gpu)
+                
 
                     batch_size = batch_data["graph"].num_graphs
                     # Iterate over output head and retrieve
@@ -190,6 +191,8 @@ def run_once(  # noqa: C901, PLR0912, PLR0915
                 pred, gtruth = output
                 pred = np.squeeze(np.array(pred))
                 gtruth = np.squeeze(np.array(gtruth))
+
+                # print(pred, gtruth)
 
                 if LABEL_TYPE == 'multilabel':
                     # print(pred, gtruth)

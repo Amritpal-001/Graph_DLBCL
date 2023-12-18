@@ -227,7 +227,7 @@ class SlideGraphArch(nn.Module):
             wsi_labels = wsi_labels.type(torch.float32).cpu().numpy()
         else:
             wsi_output = wsi_output.cpu().numpy()
-            wsi_output = np.argmax(wsi_output, axis=1)
+            # wsi_output = np.argmax(wsi_output, axis=1)
             wsi_labels = wsi_labels.type(torch.float32).cpu().numpy()
 
         # Output should be a single tensor or scalar
